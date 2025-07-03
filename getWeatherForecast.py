@@ -2,10 +2,11 @@ import requests
 import time
 import os
 import shlex
+from datetime import datetime
 
-# --- SET YOUR LOCATION HERE ---
-LATITUDE = xx.xxxx   # Coordinates for your location
-LONGITUDE = -xx.xxxx
+# --- SET YOUR LOCATION AND UNITS HERE ---
+LATITUDE = 39.5359   # Example: Bel Air, MD
+LONGITUDE = -76.3483
 UNITS = 'imperial'   # 'imperial' or 'metric'
 
 def deg_to_compass(num):
@@ -60,18 +61,35 @@ def get_current_conditions(station_url):
 def get_forecast(forecast_url):
     forecast = requests.get(forecast_url, timeout=10).json()
     periods = forecast['properties']['periods']
-    today, tonight = None, None
-    for period in periods:
+    today, tonight, tomorrow = None, None, None
+    # Find today, tonight, tomorrow in the forecast periods
+    for i, period in enumerate(periods):
         name = period['name'].lower()
+        # Find 'today'
         if 'today' in name and not today:
             today = period['detailedForecast']
+            # Look ahead for 'tonight'
+            if i+1 < len(periods) and 'tonight' in periods[i+1]['name'].lower():
+                tonight = periods[i+1]['detailedForecast']
+            # Look ahead for 'tomorrow' or next day
+            if i+2 < len(periods):
+                tomorrow_name = periods[i+2]['name'].lower()
+                if 'tomorrow' in tomorrow_name or tomorrow_name in [
+                    'saturday', 'sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday'
+                ]:
+                    tomorrow = periods[i+2]['detailedForecast']
+            break
+        # If "tonight" is first (evening run), adjust accordingly
         elif 'tonight' in name and not tonight:
             tonight = period['detailedForecast']
-        elif 'this afternoon' in name and not today:
-            today = period['detailedForecast']
-        elif 'overnight' in name and not tonight:
-            tonight = period['detailedForecast']
-    return today, tonight
+            if i+1 < len(periods):
+                tomorrow_name = periods[i+1]['name'].lower()
+                if 'tomorrow' in tomorrow_name or tomorrow_name in [
+                    'saturday', 'sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday'
+                ]:
+                    tomorrow = periods[i+1]['detailedForecast']
+            break
+    return today, tonight, tomorrow
 
 def split_and_send_message(message, send_func, max_length=200, delay=1):
     words = message.split(' ')
@@ -93,11 +111,11 @@ def split_and_send_message(message, send_func, max_length=200, delay=1):
 
 def send_meshtastic_message(message):
     quoted_message = shlex.quote(message)
-    # Uncomment below to actually send
+    # Uncomment below to actually send via Meshtastic
     os.system(f"/usr/local/bin/meshtastic --ch-index 3 --sendtext {quoted_message}")
-    print(f"Would send: {quoted_message}")  # For testing
+    #print(f"Would send: {quoted_message}")  # For testing
 
-def print_weather(current, today, tonight):
+def print_weather(current, today, tonight, tomorrow):
     def fmt(val, fstr):
         try:
             return fstr.format(val)
@@ -124,19 +142,31 @@ def print_weather(current, today, tonight):
         f"Wind: {wind} from {safe(current.get('wind_direction_cardinal'))} ({fmt(current.get('wind_direction'), '{:.0f}')}°)\n"
         f"Pressure: {pressure}\n\n"
     )
-    output2 = (
-        f"Forecast for Bel Air, MD:\n\n"
-        f"Today: {today if today else 'N/A'}\n\n"
-        f"Tonight: {tonight if tonight else 'N/A'}"
-    )
+
+    # Get current local time for decision
+    now = datetime.now()
+    hour = now.hour
+    if 0 <= hour < 17:  # 12:00 AM to 4:59 PM
+        forecast_block = (
+            f"Forecast for Bel Air, MD:\n\n"
+            f"Today: {today if today else 'N/A'}\n"
+            f"Tonight: {tonight if tonight else 'N/A'}"
+        )
+    else:  # 5:00 PM to 11:59 PM
+        forecast_block = (
+            f"Forecast for Bel Air, MD:\n\n"
+            f"Tonight: {tonight if tonight else 'N/A'}\n"
+            f"Tomorrow: {tomorrow if tomorrow else 'N/A'}"
+        )
+
     split_and_send_message(output1, send_meshtastic_message)
-    split_and_send_message(output2, send_meshtastic_message)
+    split_and_send_message(forecast_block, send_meshtastic_message)
 
 if __name__ == '__main__':
     try:
         endpoints = get_weather_json(LATITUDE, LONGITUDE)
         current = get_current_conditions(endpoints['station_url'])
-        today, tonight = get_forecast(endpoints['forecast_url'])
-        print_weather(current, today, tonight)
+        today, tonight, tomorrow = get_forecast(endpoints['forecast_url'])
+        print_weather(current, today, tonight, tomorrow)
     except Exception as e:
         print("Error:", e)
