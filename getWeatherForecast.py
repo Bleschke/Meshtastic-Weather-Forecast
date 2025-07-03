@@ -5,8 +5,8 @@ import shlex
 from datetime import datetime
 
 # --- SET YOUR LOCATION AND UNITS HERE ---
-LATITUDE = 39.5359   # Example: Bel Air, MD
-LONGITUDE = -76.3483
+LATITUDE = xx.xxxx   # Coordinates for your location
+LONGITUDE = -xx.xxxx
 UNITS = 'imperial'   # 'imperial' or 'metric'
 
 def deg_to_compass(num):
@@ -134,7 +134,7 @@ def print_weather(current, today, tonight, tomorrow):
         pressure = f"{fmt(current.get('pressure_hpa'), '{:.1f}')} hPa"
 
     output1 = (
-        f"Current Weather in Bel Air, MD:\n\n"
+        f"Current Weather:\n\n"
         f"Date/Time: {current['datetime']}\n"
         f"Description: {safe(current.get('description'))}\n"
         f"Temperature: {temp}\n"
@@ -148,13 +148,13 @@ def print_weather(current, today, tonight, tomorrow):
     hour = now.hour
     if 0 <= hour < 17:  # 12:00 AM to 4:59 PM
         forecast_block = (
-            f"Forecast for Bel Air, MD:\n\n"
+            f"Forecast:\n\n"
             f"Today: {today if today else 'N/A'}\n"
             f"Tonight: {tonight if tonight else 'N/A'}"
         )
     else:  # 5:00 PM to 11:59 PM
         forecast_block = (
-            f"Forecast for Bel Air, MD:\n\n"
+            f"Forecast:\n\n"
             f"Tonight: {tonight if tonight else 'N/A'}\n"
             f"Tomorrow: {tomorrow if tomorrow else 'N/A'}"
         )
