@@ -1,12 +1,12 @@
 import requests
-import os
 import time
-
-# NOTE: I give credit to ChatGPT for creating the majority of this code.
+import os
+import shlex
 
 # --- SET YOUR LOCATION HERE ---
-LATITUDE = xx.xxxx   # Example: Look up the coordinates for your zip code and plug the values in here.
+LATITUDE = xx.xxxx   # Coordinates for your location
 LONGITUDE = -xx.xxxx
+UNITS = 'imperial'   # 'imperial' or 'metric'
 
 def deg_to_compass(num):
     if num is None:
@@ -32,16 +32,17 @@ def get_current_conditions(station_url):
     temp_c = p['temperature']['value']
     temp_f = temp_c * 9/5 + 32 if temp_c is not None else None
     humidity = p['relativeHumidity']['value']
-    wind_speed_mps = (p['windSpeed']['value'] / 3.6) if p['windSpeed']['value'] is not None else None # windSpe                                                                                                                              ed is in km/h
+    wind_speed_mps = (p['windSpeed']['value'] / 3.6) if p['windSpeed']['value'] is not None else None
     wind_speed_mph = wind_speed_mps * 2.23694 if wind_speed_mps is not None else None
     wind_dir = p['windDirection']['value']
     wind_dir_cardinal = deg_to_compass(wind_dir) if wind_dir is not None else 'N/A'
-    pressure_hpa = (p['barometricPressure']['value'] / 100) if p['barometricPressure']['value'] is not None els                                                                                                                              e None
+    pressure_hpa = (p['barometricPressure']['value'] / 100) if p['barometricPressure']['value'] is not None else None
     pressure_inhg = pressure_hpa * 0.02953 if pressure_hpa is not None else None
     desc = p['textDescription']
     # get date and time
-    named_tuple = time.localtime() # get struct_time
+    named_tuple = time.localtime()
     time_string = time.strftime("%m/%d/%Y, %H:%M:%S", named_tuple)
+
     return {
         'datetime': time_string,
         'description': desc,
@@ -72,40 +73,64 @@ def get_forecast(forecast_url):
             tonight = period['detailedForecast']
     return today, tonight
 
+def split_and_send_message(message, send_func, max_length=200, delay=1):
+    words = message.split(' ')
+    chunk = ""
+    for word in words:
+        test_len = len(chunk) + (1 if chunk else 0) + len(word)
+        if test_len > max_length:
+            send_func(chunk)
+            time.sleep(delay)
+            chunk = word
+        else:
+            if chunk:
+                chunk += ' ' + word
+            else:
+                chunk = word
+    if chunk:
+        send_func(chunk)
+        time.sleep(delay)
+
+def send_meshtastic_message(message):
+    quoted_message = shlex.quote(message)
+    # Uncomment below to actually send
+    os.system(f"/usr/local/bin/meshtastic --ch-index 3 --sendtext {quoted_message}")
+    print(f"Would send: {quoted_message}")  # For testing
+
 def print_weather(current, today, tonight):
     def fmt(val, fstr):
         try:
             return fstr.format(val)
         except (TypeError, ValueError):
             return 'N/A'
+    def safe(val):
+        return val if val is not None else 'N/A'
+
+    if UNITS == 'imperial':
+        temp = f"{fmt(current.get('temperature_f'), '{:.1f}')}°F"
+        wind = f"{fmt(current.get('wind_speed_mph'), '{:.1f}')} mph"
+        pressure = f"{fmt(current.get('pressure_inhg'), '{:.2f}')} inHg"
+    else:
+        temp = f"{fmt(current.get('temperature_c'), '{:.1f}')}°C"
+        wind = f"{fmt(current.get('wind_speed_mps'), '{:.1f}')} m/s"
+        pressure = f"{fmt(current.get('pressure_hpa'), '{:.1f}')} hPa"
 
     output1 = (
-        f"Current Weather:\n\n"
+        f"Current Weather in Bel Air, MD:\n\n"
         f"Date/Time: {current['datetime']}\n"
-        f"Conditions: {current['description']}\n"
-        f"Temperature: "
-        f"{current['temperature_c']:.1f}°C / {current['temperature_f']:.1f}°F\n"
-        f"Humidity: "
-        f"{int(round(current['humidity'])) if current['humidity'] is not None else 'N/A'}%\n"
-        f"Wind: "
-        f"{current['wind_speed_mps']:.1f} m/s / {current['wind_speed_mph']:.1f} mph from "
-        f"{current['wind_direction_cardinal']} ({current['wind_direction']:.0f}°)\n"
-        f"Pressure: "
-        f"{current['pressure_hpa']:.1f} hPa / {current['pressure_inhg']:.2f} inHg\n\n"
+        f"Description: {safe(current.get('description'))}\n"
+        f"Temperature: {temp}\n"
+        f"Humidity: {int(round(current['humidity'])) if current.get('humidity') is not None else 'N/A'}%\n"
+        f"Wind: {wind} from {safe(current.get('wind_direction_cardinal'))} ({fmt(current.get('wind_direction'), '{:.0f}')}°)\n"
+        f"Pressure: {pressure}\n\n"
     )
     output2 = (
-        f"Forecast:\n\n"
-        f"Today: {today if today else 'N/A'}\n"
+        f"Forecast for Bel Air, MD:\n\n"
+        f"Today: {today if today else 'N/A'}\n\n"
         f"Tonight: {tonight if tonight else 'N/A'}"
-
     )
-    #print(output1)
-    #print(output2)
-    send_content1 = " ' " + output1 + " ' "
-    send_content2 = " ' " + output2 + " ' "
-    os.system("/usr/local/bin/meshtastic --ch-index 3 --sendtext" + send_content1)
-    os.system("/usr/local/bin/meshtastic --ch-index 3 --sendtext" + send_content2)
-
+    split_and_send_message(output1, send_meshtastic_message)
+    split_and_send_message(output2, send_meshtastic_message)
 
 if __name__ == '__main__':
     try:
