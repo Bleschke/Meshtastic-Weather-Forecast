@@ -5,7 +5,7 @@ import shlex
 from datetime import datetime
 
 # --- SET YOUR LOCATION AND UNITS HERE ---
-LATITUDE = xx.xxxx   # Enter coordinates for your location
+LATITUDE = xx.xxxx   # Enter Coordinates for your location where the xx.xxxx is located.
 LONGITUDE = -xx.xxxx
 UNITS = 'imperial'   # 'imperial' or 'metric'
 
@@ -61,46 +61,22 @@ def get_current_conditions(station_url):
 def get_forecast(forecast_url):
     forecast = requests.get(forecast_url, timeout=10).json()
     periods = forecast['properties']['periods']
-    # We'll find the index for "today" or "tonight", then get next period(s) as needed
-    today_idx = tonight_idx = None
-    for i, period in enumerate(periods):
-        name = period['name'].lower()
-        if ('today' in name or 'this afternoon' in name) and today_idx is None:
-            today_idx = i
-            break
-        elif 'tonight' in name and tonight_idx is None:
-            tonight_idx = i
-            break
-    # If it's before 5pm, show today+tonight; after 5pm, show tonight+next period (tomorrow)
-    now = datetime.now()
-    hour = now.hour
-    if 0 <= hour < 17 and today_idx is not None:  # 12:00 AM to 4:59 PM
-        today = periods[today_idx]['detailedForecast']
-        today_label = periods[today_idx]['name']
-        if today_idx + 1 < len(periods):
-            tonight = periods[today_idx+1]['detailedForecast']
-            tonight_label = periods[today_idx+1]['name']
-        else:
-            tonight = None
-            tonight_label = 'Tonight'
-        tomorrow = None
-        tomorrow_label = None
-    elif tonight_idx is not None:  # 5:00 PM to 11:59 PM
-        tonight = periods[tonight_idx]['detailedForecast']
-        tonight_label = periods[tonight_idx]['name']
-        if tonight_idx + 1 < len(periods):
-            tomorrow = periods[tonight_idx+1]['detailedForecast']
-            tomorrow_label = periods[tonight_idx+1]['name']
-        else:
-            tomorrow = None
-            tomorrow_label = 'Tomorrow'
-        today = None
-        today_label = None
-    else:
-        # fallback if periods are missing
-        today = tonight = tomorrow = None
-        today_label = tonight_label = tomorrow_label = None
-    return (today_label, today), (tonight_label, tonight), (tomorrow_label, tomorrow)
+
+    # Always select the first three periods for flexibility
+    label1, label2, label3 = None, None, None
+    text1, text2, text3 = None, None, None
+
+    if len(periods) > 0:
+        label1 = periods[0]['name']
+        text1 = periods[0]['detailedForecast']
+    if len(periods) > 1:
+        label2 = periods[1]['name']
+        text2 = periods[1]['detailedForecast']
+    if len(periods) > 2:
+        label3 = periods[2]['name']
+        text3 = periods[2]['detailedForecast']
+
+    return (label1, text1), (label2, text2), (label3, text3)
 
 def split_and_send_message(message, send_func, max_length=200, delay=1):
     words = message.split(' ')
@@ -126,7 +102,7 @@ def send_meshtastic_message(message):
     os.system(f"/usr/local/bin/meshtastic --ch-index 3 --sendtext {quoted_message}")
     #print(f"Would send: {quoted_message}")  # For testing
 
-def print_weather(current, today_pair, tonight_pair, tomorrow_pair):
+def print_weather(current, period1, period2, period3):
     def fmt(val, fstr):
         try:
             return fstr.format(val)
@@ -154,14 +130,14 @@ def print_weather(current, today_pair, tonight_pair, tomorrow_pair):
         f"Pressure: {pressure}\n\n"
     )
 
-    # Decide which forecast blocks to show
-    forecast_lines = ["Forecast:\n"]
-    if today_pair[0] and today_pair[1]:  # label, forecast
-        forecast_lines.append(f"{today_pair[0]}: {today_pair[1]}")
-    if tonight_pair[0] and tonight_pair[1]:
-        forecast_lines.append(f"{tonight_pair[0]}: {tonight_pair[1]}")
-    if tomorrow_pair[0] and tomorrow_pair[1]:
-        forecast_lines.append(f"{tomorrow_pair[0]}: {tomorrow_pair[1]}")
+    forecast_lines = [f"Forecast:\n"]
+    if period1[0] and period1[1]:
+        forecast_lines.append(f"{period1[0]}: {period1[1]}")
+    if period2[0] and period2[1]:
+        forecast_lines.append(f"{period2[0]}: {period2[1]}")
+    # If you want a 3rd period, just uncomment the next line
+    # if period3[0] and period3[1]:
+    #     forecast_lines.append(f"{period3[0]}: {period3[1]}")
     forecast_block = "\n".join(forecast_lines)
 
     split_and_send_message(output1, send_meshtastic_message)
@@ -171,7 +147,7 @@ if __name__ == '__main__':
     try:
         endpoints = get_weather_json(LATITUDE, LONGITUDE)
         current = get_current_conditions(endpoints['station_url'])
-        today_pair, tonight_pair, tomorrow_pair = get_forecast(endpoints['forecast_url'])
-        print_weather(current, today_pair, tonight_pair, tomorrow_pair)
+        period1, period2, period3 = get_forecast(endpoints['forecast_url'])
+        print_weather(current, period1, period2, period3)
     except Exception as e:
         print("Error:", e)
