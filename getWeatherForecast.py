@@ -5,8 +5,8 @@ import shlex
 from datetime import datetime
 
 # --- SET YOUR LOCATION AND UNITS HERE ---
-LATITUDE = xx.xxxx   # Enter Coordinates for your location where the xx.xxxx is located.
-LONGITUDE = -xx.xxxx
+LATITUDE = xx.xxxx   # Enter coordinates for your location
+LONGITUDE = -xxxx.xxxx
 UNITS = 'imperial'   # 'imperial' or 'metric'
 
 def deg_to_compass(num):
@@ -21,41 +21,61 @@ def get_weather_json(lat, lon):
     points = requests.get(points_url, timeout=10).json()
     obs_url = points['properties']['observationStations']
     forecast_url = points['properties']['forecast']
-    station_url = requests.get(obs_url, timeout=10).json()['observationStations'][0]
+    stations = requests.get(obs_url, timeout=10).json()['observationStations']
     return {
         'forecast_url': forecast_url,
-        'station_url': station_url
+        'stations': stations  # now a list
     }
 
-def get_current_conditions(station_url):
-    obs = requests.get(f"{station_url}/observations/latest", timeout=10).json()
-    p = obs['properties']
-    temp_c = p['temperature']['value']
-    temp_f = temp_c * 9/5 + 32 if temp_c is not None else None
-    humidity = p['relativeHumidity']['value']
-    wind_speed_mps = (p['windSpeed']['value'] / 3.6) if p['windSpeed']['value'] is not None else None
-    wind_speed_mph = wind_speed_mps * 2.23694 if wind_speed_mps is not None else None
-    wind_dir = p['windDirection']['value']
-    wind_dir_cardinal = deg_to_compass(wind_dir) if wind_dir is not None else 'N/A'
-    pressure_hpa = (p['barometricPressure']['value'] / 100) if p['barometricPressure']['value'] is not None else None
-    pressure_inhg = pressure_hpa * 0.02953 if pressure_hpa is not None else None
-    desc = p['textDescription']
-    # get date and time
-    named_tuple = time.localtime()
-    time_string = time.strftime("%m/%d/%Y, %H:%M:%S", named_tuple)
-
+def get_current_conditions(stations):
+    # Try each station until one works with good data
+    for station_url in stations:
+        try:
+            obs = requests.get(f"{station_url}/observations/latest", timeout=10).json()
+            p = obs['properties']
+            temp_c = p['temperature']['value']
+            temp_f = temp_c * 9/5 + 32 if temp_c is not None else None
+            humidity = p['relativeHumidity']['value']
+            wind_speed_mps = (p['windSpeed']['value'] / 3.6) if p['windSpeed']['value'] is not None else None
+            wind_speed_mph = wind_speed_mps * 2.23694 if wind_speed_mps is not None else None
+            wind_dir = p['windDirection']['value']
+            wind_dir_cardinal = deg_to_compass(wind_dir) if wind_dir is not None else 'N/A'
+            pressure_hpa = (p['barometricPressure']['value'] / 100) if p['barometricPressure']['value'] is not None else None
+            pressure_inhg = pressure_hpa * 0.02953 if pressure_hpa is not None else None
+            desc = p['textDescription']
+            # get date and time
+            named_tuple = time.localtime()
+            time_string = time.strftime("%m/%d/%Y, %H:%M:%S", named_tuple)
+            # If any key value is not None, assume this station is valid!
+            if any(x is not None for x in [temp_c, humidity, wind_speed_mps, wind_dir, pressure_hpa]):
+                return {
+                    'datetime': time_string,
+                    'description': desc,
+                    'temperature_c': temp_c,
+                    'temperature_f': temp_f,
+                    'humidity': humidity,
+                    'wind_speed_mps': wind_speed_mps,
+                    'wind_speed_mph': wind_speed_mph,
+                    'wind_direction': wind_dir,
+                    'wind_direction_cardinal': wind_dir_cardinal,
+                    'pressure_hpa': pressure_hpa,
+                    'pressure_inhg': pressure_inhg
+                }
+        except Exception:
+            continue
+    # fallback if all stations fail
     return {
-        'datetime': time_string,
-        'description': desc,
-        'temperature_c': temp_c,
-        'temperature_f': temp_f,
-        'humidity': humidity,
-        'wind_speed_mps': wind_speed_mps,
-        'wind_speed_mph': wind_speed_mph,
-        'wind_direction': wind_dir,
-        'wind_direction_cardinal': wind_dir_cardinal,
-        'pressure_hpa': pressure_hpa,
-        'pressure_inhg': pressure_inhg
+        'datetime': time.strftime("%m/%d/%Y, %H:%M:%S", time.localtime()),
+        'description': None,
+        'temperature_c': None,
+        'temperature_f': None,
+        'humidity': None,
+        'wind_speed_mps': None,
+        'wind_speed_mph': None,
+        'wind_direction': None,
+        'wind_direction_cardinal': None,
+        'pressure_hpa': None,
+        'pressure_inhg': None
     }
 
 def get_forecast(forecast_url):
@@ -99,7 +119,7 @@ def split_and_send_message(message, send_func, max_length=200, delay=1):
 def send_meshtastic_message(message):
     quoted_message = shlex.quote(message)
     # Uncomment below to actually send via Meshtastic
-    os.system(f"/usr/local/bin/meshtastic --ch-index 3 --sendtext {quoted_message}")
+     os.system(f"/usr/local/bin/meshtastic --ch-index 3 --sendtext {quoted_message}")
     #print(f"Would send: {quoted_message}")  # For testing
 
 def print_weather(current, period1, period2, period3):
@@ -146,7 +166,7 @@ def print_weather(current, period1, period2, period3):
 if __name__ == '__main__':
     try:
         endpoints = get_weather_json(LATITUDE, LONGITUDE)
-        current = get_current_conditions(endpoints['station_url'])
+        current = get_current_conditions(endpoints['stations'])
         period1, period2, period3 = get_forecast(endpoints['forecast_url'])
         print_weather(current, period1, period2, period3)
     except Exception as e:
