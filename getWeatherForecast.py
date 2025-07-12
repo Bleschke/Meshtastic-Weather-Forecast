@@ -2,19 +2,24 @@ import requests
 import time
 import os
 import shlex
+import re
 from datetime import datetime
 
+# --- SETTINGS ---
 # --- SET YOUR LOCATION AND UNITS HERE ---
 LATITUDE = xx.xxxx   # Enter coordinates for your location
 LONGITUDE = -xxxx.xxxx
 UNITS = 'imperial'   # 'imperial' or 'metric'
+INCLUDE_FORECAST = True # Set to False to omit forecast output
+FORECAST_EMOJI = True   # True for emoji-style forecast, False for text
 
 def deg_to_compass(num):
     if num is None:
         return 'N/A'
     dirs = ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW"]
+    arrows = ['⬆️','↗️','➡️','↘️','⬇️','↙️','⬅️','↖️','⬆️','⬆️','⬆️','⬆️','⬆️','⬆️','⬆️','⬆️']
     ix = int((num/22.5)+0.5)
-    return dirs[ix % 16]
+    return dirs[ix % 16], arrows[ix % 16]
 
 def get_weather_json(lat, lon):
     points_url = f'https://api.weather.gov/points/{lat},{lon}'
@@ -28,7 +33,6 @@ def get_weather_json(lat, lon):
     }
 
 def get_current_conditions(stations):
-    # Try each station until one works with good data
     for station_url in stations:
         try:
             obs = requests.get(f"{station_url}/observations/latest", timeout=10).json()
@@ -39,14 +43,12 @@ def get_current_conditions(stations):
             wind_speed_mps = (p['windSpeed']['value'] / 3.6) if p['windSpeed']['value'] is not None else None
             wind_speed_mph = wind_speed_mps * 2.23694 if wind_speed_mps is not None else None
             wind_dir = p['windDirection']['value']
-            wind_dir_cardinal = deg_to_compass(wind_dir) if wind_dir is not None else 'N/A'
+            wind_dir_cardinal, wind_dir_arrow = deg_to_compass(wind_dir) if wind_dir is not None else ('N/A', '')
             pressure_hpa = (p['barometricPressure']['value'] / 100) if p['barometricPressure']['value'] is not None else None
             pressure_inhg = pressure_hpa * 0.02953 if pressure_hpa is not None else None
             desc = p['textDescription']
-            # get date and time
             named_tuple = time.localtime()
             time_string = time.strftime("%m/%d/%Y, %H:%M:%S", named_tuple)
-            # If any key value is not None, assume this station is valid!
             if any(x is not None for x in [temp_c, humidity, wind_speed_mps, wind_dir, pressure_hpa]):
                 return {
                     'datetime': time_string,
@@ -58,12 +60,12 @@ def get_current_conditions(stations):
                     'wind_speed_mph': wind_speed_mph,
                     'wind_direction': wind_dir,
                     'wind_direction_cardinal': wind_dir_cardinal,
+                    'wind_direction_arrow': wind_dir_arrow,
                     'pressure_hpa': pressure_hpa,
                     'pressure_inhg': pressure_inhg
                 }
         except Exception:
             continue
-    # fallback if all stations fail
     return {
         'datetime': time.strftime("%m/%d/%Y, %H:%M:%S", time.localtime()),
         'description': None,
@@ -74,6 +76,7 @@ def get_current_conditions(stations):
         'wind_speed_mph': None,
         'wind_direction': None,
         'wind_direction_cardinal': None,
+        'wind_direction_arrow': '',
         'pressure_hpa': None,
         'pressure_inhg': None
     }
@@ -81,11 +84,8 @@ def get_current_conditions(stations):
 def get_forecast(forecast_url):
     forecast = requests.get(forecast_url, timeout=10).json()
     periods = forecast['properties']['periods']
-
-    # Always select the first three periods for flexibility
     label1, label2, label3 = None, None, None
     text1, text2, text3 = None, None, None
-
     if len(periods) > 0:
         label1 = periods[0]['name']
         text1 = periods[0]['detailedForecast']
@@ -95,8 +95,79 @@ def get_forecast(forecast_url):
     if len(periods) > 2:
         label3 = periods[2]['name']
         text3 = periods[2]['detailedForecast']
-
     return (label1, text1), (label2, text2), (label3, text3)
+
+def parse_forecast_to_emoji(label, forecast_text):
+    if not forecast_text:
+        return f"{label}: N/A"
+    # Weather icon based on text
+    icons = [
+        ('sunny', '☀️'), ('mostly sunny', '🌤️'), ('clear', '🌙'),
+        ('cloudy', '☁️'), ('mostly cloudy', '⛅'), ('partly sunny', '⛅'),
+        ('partly cloudy', '⛅'), ('showers', '🌦️'), ('rain', '🌧️'),
+        ('snow', '❄️'), ('thunder', '⛈️'), ('fog', '🌫️'), ('wind', '🍃')
+    ]
+    icon = ''
+    for key, sym in icons:
+        if key in forecast_text.lower():
+            icon = sym
+            break
+    if not icon:
+        icon = '🌈'
+
+    # High, Low, Rain chance
+    high = re.search(r'[Hh]igh(?: near)? (\d+)', forecast_text)
+    low = re.search(r'[Ll]ow(?: around)? (\d+)', forecast_text)
+    rain = re.search(r'(\d+)% chance of rain', forecast_text)
+    rain_alt = re.search(r'Chance of precipitation is (\d+)%', forecast_text)
+    if not high:
+        high = re.search(r'[Hh]igh of (\d+)', forecast_text)
+    if not low:
+        low = re.search(r'[Ll]ow of (\d+)', forecast_text)
+
+    high_val = high.group(1) if high else ''
+    low_val = low.group(1) if low else ''
+    rain_val = rain.group(1) if rain else (rain_alt.group(1) if rain_alt else '')
+
+    # Wind extraction: Match many phrase variations
+    wind = re.search(r'[Ww]ind[s]?[^a-zA-Z0-9]+([NSEW]+)?[^0-9]*(\d{1,3}) ?mph', forecast_text)
+    wind_alt = re.search(r'[Ff]rom the ([NSEW]+)[^0-9]*(\d{1,3}) ?mph', forecast_text)
+    wind_dir = wind_speed = ''
+    if wind:
+        wind_dir = wind.group(1) if wind.group(1) else ''
+        wind_speed = wind.group(2)
+    elif wind_alt:
+        wind_dir = wind_alt.group(1)
+        wind_speed = wind_alt.group(2)
+    # Try to pick up any phrase like "at 10 mph"
+    if not wind_speed:
+        wind_speed_search = re.search(r'at (\d{1,3}) ?mph', forecast_text)
+        if wind_speed_search:
+            wind_speed = wind_speed_search.group(1)
+
+    # Wind direction emoji map
+    dir_emojis = {
+        'N': '⬆️', 'NE': '↗️', 'E': '➡️', 'SE': '↘️',
+        'S': '⬇️', 'SW': '↙️', 'W': '⬅️', 'NW': '↖️',
+        'NNE': '⬆️', 'ENE': '↗️', 'ESE': '↘️', 'SSE': '↙️',
+        'SSW': '⬇️', 'WSW': '⬅️', 'WNW': '↖️', 'NNW': '⬆️'
+    }
+    wind_arrow = dir_emojis.get(wind_dir, '')
+
+    units_temp = "C" if UNITS == "metric" else "F"
+    units_wind = "m/s" if UNITS == "metric" else "mph"
+
+    emoji = f"{label}: {icon}"
+    if high_val:
+        emoji += f", ⬆️ {high_val} {units_temp}"
+    if low_val:
+        emoji += f", ⬇️ {low_val} {units_temp}"
+    if rain_val:
+        emoji += f", 💧{rain_val}%"
+    if wind_speed:
+        emoji += f", 🍃 {wind_arrow} {wind_speed} {units_wind}"
+
+    return emoji
 
 def split_and_send_message(message, send_func, max_length=200, delay=1):
     words = message.split(' ')
@@ -119,8 +190,8 @@ def split_and_send_message(message, send_func, max_length=200, delay=1):
 def send_meshtastic_message(message):
     quoted_message = shlex.quote(message)
     # Uncomment below to actually send via Meshtastic
-     os.system(f"/usr/local/bin/meshtastic --ch-index 3 --sendtext {quoted_message}")
-    #print(f"Would send: {quoted_message}")  # For testing
+    # os.system(f"/usr/local/bin/meshtastic --ch-index 3 --sendtext {quoted_message}")
+    print(f"Would send: {quoted_message}")  # For testing
 
 def print_weather(current, period1, period2, period3):
     def fmt(val, fstr):
@@ -150,18 +221,19 @@ def print_weather(current, period1, period2, period3):
         f"Pressure: {pressure}\n\n"
     )
 
-    forecast_lines = [f"Forecast:\n"]
-    if period1[0] and period1[1]:
-        forecast_lines.append(f"{period1[0]}: {period1[1]}")
-    if period2[0] and period2[1]:
-        forecast_lines.append(f"{period2[0]}: {period2[1]}")
-    # If you want a 3rd period, just uncomment the next line
-    # if period3[0] and period3[1]:
-    #     forecast_lines.append(f"{period3[0]}: {period3[1]}")
-    forecast_block = "\n".join(forecast_lines)
-
     split_and_send_message(output1, send_meshtastic_message)
-    split_and_send_message(forecast_block, send_meshtastic_message)
+
+    if INCLUDE_FORECAST:
+        forecast_lines = [f"Forecast:"]
+        periods = [period1, period2]
+        for label, text in periods:
+            if label and text:
+                if FORECAST_EMOJI:
+                    forecast_lines.append(parse_forecast_to_emoji(label, text))
+                else:
+                    forecast_lines.append(f"{label}: {text}")
+        forecast_block = "\n".join(forecast_lines)
+        split_and_send_message(forecast_block, send_meshtastic_message)
 
 if __name__ == '__main__':
     try:
@@ -171,3 +243,4 @@ if __name__ == '__main__':
         print_weather(current, period1, period2, period3)
     except Exception as e:
         print("Error:", e)
+
